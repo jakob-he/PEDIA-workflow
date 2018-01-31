@@ -5,12 +5,15 @@
 """
 
 import json
+import pandas
 import os
 import csv  # necessary for creating genedict
 import requests
 import getopt
 import sys
 import argparse
+import datetime
+from JsonFile import JsonFile
 
 
 # METHODS
@@ -18,7 +21,7 @@ import argparse
 
 def makegenedict():  # creates a dictionary of genemap2.txt containing the omim id of a gene as key and genesymbol,entrez gene id as values
     genedict = {}
-    with open("genemap2.txt") as genemap:
+    with open("./../genemap2.txt") as genemap:
         genemap = genemap.readlines()[3:]
         genemap = csv.DictReader(genemap, delimiter="\t")
         for line in genemap:
@@ -524,9 +527,9 @@ def getGenomicDataCorrectFormat(fileWrongFormat, path):
     genomicEntries = fileWrongFormat['genomic_entries']
     if genomicEntries:   # check whether genomicEntries is empty, because otherwise it is of type list which will cause an error in the next line
         for entry in genomicEntries:
-            if not os.path.isfile(path + entry + '.json'):
+            if not os.path.isfile(path + str(entry) + '.json'):
                 continue
-            genomicEntry = json.load(open(path + entry + '.json'))
+            genomicEntry = json.load(open(path + str(entry) + '.json'))
             # initialize entry for genomicData list
             genomicDataElement = {}
             # create content
@@ -698,7 +701,7 @@ def get_syndrome_omim(omim_str_array):
 def get_phenotype_gene_dict():
     count = 0
     pg_dict = {}
-    with open("morbidmap.txt") as csvfile:
+    with open("./../morbidmap.txt") as csvfile:
         r = csv.reader(csvfile, delimiter='\t')
         for row in r:
             if count > 3 and len(row) > 1:
@@ -710,6 +713,7 @@ def get_phenotype_gene_dict():
             count = count + 1
     return pg_dict
 
+
 def rename_document_vcf(documents, case_id):
     vcf = {}
     for doc in documents:
@@ -719,6 +723,75 @@ def rename_document_vcf(documents, case_id):
             vcf['original_filename'] = doc['document_name']
             vcf['case_id'] = case_id
     return vcf
+
+
+def mapping(jsonobject, genomic_path):
+    """maps the dictionary of a given jsonobject to the correct format
+
+    Args:
+        jsonobject (JsonFile): a JsonFile object with wrong (new) format
+        genomic_path (string): path to folder containing genomicData
+
+    Returns:
+        jsonobject (JsonFile): the JsonFile with changed format
+
+    """
+    genedict = makegenedict()
+    defaultfeatures = ["combined_score",
+                       "feature_score", "gestalt_score", "has_mask"]
+    syn_gene_dict = get_phenotype_gene_dict()
+    result = []  # HGVS result
+    result = getGenomicDataCorrectFormat(jsonobject.raw, genomic_path)
+    geneList = []
+    jsonobject.raw['vcf'] = rename_document_vcf(
+        jsonobject.raw['documents'], jsonobject.raw['case_id'])
+    exceptions = []
+    if not jsonobject.raw['vcf']:
+        jsonobject.raw["vcf"] = "noVCF"
+    for syndrome in jsonobject.raw["detected_syndromes"]:
+        syndromename = syndrome["syndrome_name"]
+        try:  # debugging
+            idsinjson = syndrome["omim_id"]
+            if (type(idsinjson) == list):  # if syndrome has multiple omim ids in the json file
+                genes = []
+                features = {"syndrome_name": syndromename}
+                for feature in defaultfeatures:  # get features of the syndrome
+                    if feature in syndrome:
+                        features[feature] = syndrome[feature]
+                for omim in idsinjson:
+                    if str(omim) in syn_gene_dict:
+                        genes.append(syn_gene_dict[str(omim)])
+                genes = set(genes)  # discard duplicates
+                for gene in genes:
+                    # create an entry with the features and gene id
+                    entry = createentry(features, gene, genedict)
+                    geneList.append(entry.copy())
+
+            elif (type(idsinjson) == int):  # for syndrome with only one omim id
+                features = {"syndrome_name": syndromename}
+                for feature in defaultfeatures:
+                    if feature in syndrome:
+                        features[feature] = syndrome[feature]
+
+                if str(idsinjson) in syn_gene_dict:
+                    gene = syn_gene_dict[str(idsinjson)]
+                # create an entry with the features and gene id
+                entry = createentry(features, gene, genedict)
+                geneList.append(entry.copy())
+        except Exception:  # catches all exceptions
+            exceptions.append(syndromename)
+
+    jsonobject.raw["geneList"] = geneList
+    jsonobject.raw["ranks"]=jsonobject.raw["selected_syndromes"]
+    jsonobject.raw["genomicData"]=result
+    del jsonobject.raw["documents"]
+    del jsonobject.raw["detected_syndromes"]
+    del jsonobject.raw["selected_syndromes"]
+    del jsonobject.raw["genomic_entries"]
+    del jsonobject.raw["algo_deploy_version"]
+    return(jsonobject, exceptions)
+
+
 # ===============================
 # ===== main script =============
 # ===============================
@@ -726,79 +799,43 @@ def rename_document_vcf(documents, case_id):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Mapping disorder to gene')
-    parser.add_argument('-j', '--jsonsoriginal', help='path of original json folder')
-    parser.add_argument('-m', '--mappedjsons', help='path of mapped json folder')
+    parser.add_argument('--jsonfile', metavar='pathtojsonfile', type=str, nargs="?",
+                        help='Path to the json-file')
+    parser.add_argument('--genomicentries', metavar='pathtogenomicentries', type=str, nargs="?",
+                        help='Path to the folder containing the genomic entries')
+    parser.add_argument('--mappingdir', metavar='pathtomappingdir', type=str, nargs="?",
+                        help='Path to the folder containing mapped json files')
+    parser.add_argument('--logfile', metavar='pathtologfile',
+                        type=str, nargs="?", help='Path to the logfile')
     args = parser.parse_args()
 
-    path = args.jsonsoriginal
-    case_path = args.jsonsoriginal + '/cases/'
-    genomic_path = args.jsonsoriginal + '/genomics_entries/'
-    newpath = args.mappedjsons + '/'
-    if not os.path.exists(newpath):
-        os.makedirs(newpath)
-    #results = []
-    genedict = makegenedict()
-    defaultfeatures = ["combined_score",
-                       "feature_score", "gestalt_score", "has_mask"]
-    syn_gene_dict = get_phenotype_gene_dict()
-    for fileName in os.listdir(case_path):
-        if fileName == '.gitignore':
-            continue
+    now = datetime.datetime.now()
+    date = now.strftime('%Y-%m-%d')
+    time = now.strftime('%H:%M:%S')
 
-        test = fileName
-        # debugging for jsons file not yet mapped
-        if test not in os.listdir(newpath) and os.path.isfile(case_path + test):
-            mainurl = "https://api.omim.org/api/entry/search?"
-            file_content = json.load(open(case_path + fileName))
-            result = []  # HGVS result
-            #result.append(fileName)
-            result = getGenomicDataCorrectFormat(file_content, genomic_path)
-            #results.append(result)
-            geneList = []
-            file_content["genomicData"] = result
-            file_content['vcf'] = rename_document_vcf(file_content['documents'], file_content['case_id'])
-            for syndrome in file_content["detected_syndromes"]:
-                syndromename = syndrome["syndrome_name"]
-                try:  # debugging
-                    idsinjson = syndrome["omim_id"]
-                    if (type(idsinjson) == list):  # if syndrome has multiple omim ids in the json file
-                        genes = []
-                        features = {"syndrome_name": syndromename}
-                        for feature in defaultfeatures:  # get features of the syndrome
-                            if feature in syndrome:
-                                features[feature] = syndrome[feature]
-                        for omim in idsinjson:
-                            if str(omim) in syn_gene_dict:
-                                genes.append(syn_gene_dict[str(omim)])
-                        genes = set(genes)  # discard duplicates
-                        for gene in genes:
-                            # create an entry with the features and gene id
-                            entry = createentry(features, gene, genedict)
-                            geneList.append(entry.copy())
+    genomic_path = args.genomicentries + "/"
+    jsonfile = args.jsonfile
+    newpath = args.mappingdir + '/'
+    logfile = args.logfile
+    mapped=False
+    if os.path.isfile(jsonfile):
+        jsonobject = JsonFile(jsonfile)
+        if jsonobject.check() == {}:
+            jsonobject, exceptionlist = mapping(jsonobject, genomic_path)
+            if exceptionlist:
+                with open(newpath + "Mappingexceptions.json", "r+") as errorlist:
+                    errordata = json.load(errorlist)
+                    errordata.update({jsonobject.raw["case_id"]:exceptionlist})
+                    errorlist.seek(0)
+                    json.dump(errordata, errorlist)
+                    errorlist.truncate()
+            # create new json contanting mapped data
+            mapped=True
+            with open(newpath + str(jsonobject.raw["case_id"]) + ".json", "w") as mappedjsonpath:
+                json.dump(jsonobject.raw, mappedjsonpath)
 
-                    elif (type(idsinjson) == int):  # for syndrome with only one omim id
-                        features = {"syndrome_name": syndromename}
-                        for feature in defaultfeatures:
-                            if feature in syndrome:
-                                features[feature] = syndrome[feature]
-
-                        if str(idsinjson) in syn_gene_dict:
-                            gene = syn_gene_dict[str(idsinjson)]
-                        # create an entry with the features and gene id
-                        entry = createentry(features, gene, genedict)
-                        geneList.append(entry.copy())
-
-                    else:  # catches syndromes without omim ids
-                        with open("Exceptions_no_omimid_in_file.txt", "a"):
-                            write(str(fileName) + "\t" + syndromename + "\n")
-                    # adds the genelist to the json file
-                    file_content["geneList"] = geneList
-                    # saves json file to new location
-                    newjson = open(newpath + str(fileName), "w")
-                    json.dump(file_content, newjson)
-                except Exception:  # catches all other exceptions
-                    with open("Other_Exceptions.txt", "a") as exceptions:
-                        exceptions.write(
-                            str(fileName) + "\t" + syndromename + "\n")
-        else:
-            print("already done")
+    # save to logfile
+    progress = pandas.read_excel(open(logfile, 'rb'), sheetname=0)
+    newest = [date, time, jsonobject.raw["case_id"], str(mapped)]
+    progress.loc[len(progress)] = newest
+    progress.to_excel(logfile, index=False)
