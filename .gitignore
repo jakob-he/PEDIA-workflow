@@ -5,6 +5,9 @@
 .snakemake
 *.done
 *.log
+*.ini
+
+/.cache/
 
 *.tar.gz
 
@@ -17,6 +20,7 @@ __pycache__
 
 # configuration files - might contain SENSITIVE data !!!!!
 config.ini
+config.yml
 
 # ignore all test data
 /tests/data

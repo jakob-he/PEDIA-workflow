@@ -12,26 +12,34 @@ def get_case_info(file_writer, file_content, reason, status="Pass"):
     out = []
     tmp_out = []
     info = []
+    ge_out = []
+    hgvs_out = []
    
     # Submitter
     submitter = file_content["submitter"]
     name = submitter["user_name"]
+    email = submitter["user_email"]
+    team = submitter["user_team"]
 
     # Check disease-causing gene
     for entry in file_content['genomic_entries']:
-        if 'notes' in entry['variants']:
-            info.append(entry['variants']['notes'])
-
-    genomic = file_content['genomicData']
-    ge_out = [ge_entry['Test Information']['Gene Name'] for ge_entry in genomic]
+        if type(entry) != int and 'variants' in entry:
+            if 'notes' in entry['variants']:
+                info.append(entry['variants']['notes'])
+    if 'genomicData' in file_content:
+        genomic = file_content['genomicData']
+        ge_out = [ge_entry['Test Information']['Gene Name'] for ge_entry in genomic]
+        hgvs_out = [ge_entry['Mutations']['HGVS-code'] for ge_entry in genomic]
 
     # Check selected syndrome
     if 'selected_syndromes' in file_content:
         syn_out = []
         omim_out = []
+        diag_out = []
         for syn in file_content['selected_syndromes']:
             syn_out.append(syn['syndrome_name'])
             omim_out.append(syn['omim_id'])
+            diag_out.append(syn['diagnosis'])
 
         if len(syn_out) > 1:
             list_syn = []
@@ -41,6 +49,7 @@ def get_case_info(file_writer, file_content, reason, status="Pass"):
                     list_syn = syn
                 else:
                     single_syn = syn
+
             if single_syn not in list_syn:
                 if status == "Pass":
                     print(fileName + ": Multiple different selected syndromes")
@@ -55,8 +64,12 @@ def get_case_info(file_writer, file_content, reason, status="Pass"):
     tmp_out.append(str(reason)[1:-1])
     tmp_out.append(str(ge_out)[1:-1])
     tmp_out.append(name)
+    tmp_out.append(email)
+    tmp_out.append(team)
     tmp_out.append(syn_out)
+    tmp_out.append(diag_out)
     tmp_out.append(omim_out)
+    tmp_out.append(hgvs_out)
     file_writer.writerow(tmp_out)
 
 
@@ -71,13 +84,14 @@ if __name__ == '__main__':
     log_file = open(args.log)
     log_data = json.load(log_file)
 
+
     output_filename = os.path.join(args.output, 'summary_cases.csv')
     
     # ['failed', 'benign_excluded', 'pathogenic_missing', 'vcf_failed', 'passed']
     with open(output_filename, 'w') as csvfile:
         file_writer = csv.writer(csvfile, delimiter=' ')
 
-        for fileName in log_data["passed"]:
+        for fileName in log_data["passed"].keys():
             test = fileName
             file_content = json.load(open(os.path.join(case_path, fileName + '.json')))
             get_case_info(file_writer, file_content, [])
@@ -98,3 +112,11 @@ if __name__ == '__main__':
                 reason.append(data['type'])
             get_case_info(file_writer, file_content, reason, "Fail")
             
+        log_failed = [case for case in log_data['json_check_failed']]
+        for case in log_failed:
+            file_content = json.load(open(os.path.join('process/aws_dir/cases/', case + '.json')))
+            fileName = case
+            reason = []
+            for data in log_data['json_check_failed'][case]['issues']:
+                reason.append(data)
+            get_case_info(file_writer, file_content, reason, "Fail")

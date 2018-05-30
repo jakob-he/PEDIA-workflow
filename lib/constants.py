@@ -5,10 +5,13 @@ Constants used in other scripts. These are mostly interpretations of fields
 provided in the Face2Gene jsons.
 '''
 
-HGVS_ERRORDICT_VERSION = 6
+HGVS_ERRORDICT_VERSION = 10
 
 # Bucket name, from where Face2Gene vcf and json files will be downloaded
 AWS_BUCKET_NAME = "fdna-pedia-dump"
+
+# caching directory
+CACHE_DIR = ".cache"
 
 # tests that count as chromosomal tests, if these are positive, cases will be
 # excluded
@@ -59,4 +62,14 @@ HGVS_PREFIX = {
 # blacklist HPO illegal hpo terms
 ILLEGAL_HPO = [
     'HP:0000006'  # autosomal-dominant inheritance
+]
+
+CONFIRMED_DIAGNOSIS = [
+    "MOLECULARLY_DIAGNOSED",
+    "CLINICALLY_DIAGNOSED",
+    "CORRECTED_DIAGNOSIS"
+]
+
+DIFFERENTIAL_DIAGNOSIS = [
+    "DIFFERENTIAL_DIAGNOSIS",
 ]
