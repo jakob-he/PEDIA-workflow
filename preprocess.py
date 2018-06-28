@@ -87,44 +87,6 @@ def create_config(
         vcffolder: str = "data/PEDIA/vcfs/original"
 ) -> None:
     '''Creates config.yml file based on the VCF files'''
-<<<<<<< HEAD
-    vcffiles = [file.split(".")[0] for file in os.listdir(vcffolder)]
-    singlefiles = [file.split(".")[0] for file in os.listdir(simvcffolder)]
-    vcffiles = list(filter(None,vcffiles))
-    singlefiles = list(filter(None,singlefiles))
-    testfiles = []
-    with open("config.yml", "w") as configfile:
-        configfile.write('SINGLE_SAMPLES:\n')
-        for file in singlefiles:
-            if file not in vcffiles:
-                configfile.write(" - " + file + "\n")
-        configfile.write('VCF_SAMPLES:\n')
-        for file in vcffiles:
-            if file in singlefiles:
-                configfile.write(" - " + file + "\n")
-            else:
-                testfiles.append(file)
-        configfile.write('TEST_SAMPLES:\n')
-        for file in testfiles:
-            configfile.write(" - " + file + "\n")
-
-
-@progress_bar("Process jsons")
-def yield_jsons(json_files, corrected):
-    for json_file in json_files:
-        yield json_parser.NewJson.from_file(json_file, corrected)
-
-
-@progress_bar("Create cases")
-def yield_cases(json_files, error_fixer, omim_obj, exclusion):
-    for json_file in json_files:
-        yield case.Case(
-            json_file,
-            error_fixer=error_fixer,
-            omim_obj=omim_obj,
-            exclude_benign_variants=exclusion
-        )
-=======
     # real vcf files
     vcffiles = {
         int(f.split(".")[0])
@@ -135,7 +97,6 @@ def yield_cases(json_files, error_fixer, omim_obj, exclusion):
         int(f.split(".")[0])
         for f in os.listdir(simvcffolder) if not f.startswith(".")
     }
->>>>>>> 5459bc43f96709703f2580584824d1023f810ce9
 
     # completely simulated cases
     single_samples = list(singlefiles - vcffiles)
