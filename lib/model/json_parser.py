@@ -8,6 +8,7 @@ Class overview:
     JsonFile - Base class handling IO
     OldJson - Old json format for compatibility concerns
     NewJson - Current json format
+    AlternativeJson - Alternative new json format
 '''
 
 import logging
@@ -319,7 +320,7 @@ class OldJson(JsonFile):
         super().__init__(data, save_path=save_path, file_name=file_name)
 
     @classmethod
-    def from_case_object(cls, case: 'Case', path: str) \
+    def from_case_object(cls, case: 'Case', path: str, format: str = "NewJson") \
             -> 'OldJson':
         '''Create an old json object from a case entity. This is an alternative
         constructor.
@@ -351,6 +352,13 @@ class OldJson(JsonFile):
                     or data['Mutations']['HGVS-code'] != "":
                 genomic_data.append(data)
 
+        if format == "NewJson":
+            genomic_entries = case.data.get_js()['genomic_entries']
+            selected_syndromes =  case.data.get_js()['selected_syndromes']
+        elif format == "AlternativeJson":
+            genomic_entries = ''
+            selected_syndromes =  case.data.get_js()['case_data']['selected_syndromes']
+
         data = {
             'algo_deploy_version': case.algo_version,
             'case_id': case.case_id,
@@ -364,9 +372,10 @@ class OldJson(JsonFile):
             'geneList': case.gene_list,
             'detected_syndromes': case.get_phenomized_list(),
             'genomicData': genomic_data,
-            'genomic_entries': case.data.get_js()['genomic_entries'],
-            'selected_syndromes': case.data.get_js()['selected_syndromes']
+            'genomic_entries': genomic_entries,
+            'selected_syndromes': selected_syndromes
         }
+
         obj = cls(data, path, "{}.json".format(case.case_id))
         return obj
 
@@ -608,3 +617,163 @@ class NewJson(JsonFile):
         '''Unaltered list of detected syndromes.
         '''
         return self._js['detected_syndromes']
+
+
+
+class AlternativeJson(JsonFile):
+    '''Implement the new alternative JSON format
+    '''
+    schema = {
+        'case_data' : {
+            'case_id': '',
+            'selected_syndromes':[
+                {
+                'diagnosis':'',
+                'syndrome':{'syndrome_name':'','omim_id':''}
+                }
+            ],
+            'selected_features':[
+                {
+                'is_present': '',
+                'feature':{'feature_name':'','hpo_id': '','hpo_full_id':'',}
+                }
+            ],
+            'suggested_syndromes':[
+                {
+                'gestalt_score':'',
+                'feature_score':'',
+                'syndrome':{'syndrome_name':'','omim_id':''}}
+            ],
+            'posting_user':{'userDisplayName':'','userEmail':''},
+            'teams':{'team_name':''}
+        }
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def get_case_id(self) -> str:
+        '''Returns the case ID'''
+        return str(self._js['case_data']['case_id'])
+
+
+    def get_variants(self) -> [str]:
+        '''Returns an empty list since no genomic data is given'''
+        return []
+
+    def get_algo_version(self) -> str:
+        '''Returns an empty string since the algo version is not given in this
+        format.
+        '''
+        return ''
+
+    def get_features(self) -> [str]:
+        '''Return a list of HPO IDs correponding to entered phenotypic
+        features
+        '''
+        return [feature['feature']['hpo_full_id'] for feature in self._js['case_data']['selected_features']]
+
+    def get_submitter(self) -> {str : str}:
+        '''Return a dictionary containing the submitter name, team and email.
+        '''
+        submitter = {
+            'name': self._js['case_data']['posting_user']['userDisplayName'],
+            'team': self._js['case_data']['teams']['team_name'],
+            'email': self._js['case_data']['posting_user']['userEmail']
+            }
+        return submitter
+
+    def get_vcf(self) -> [str]:
+        '''Returns an empty list since in this format no vcf files are given
+        '''
+        return []
+
+    def get_js(self):
+        return self._js
+
+    def get_syndrome_suggestions_and_diagnosis(self) -> pandas.DataFrame:
+        '''Return a pandas dataframe containing all suggested syndromes and the
+        selected syndroms, which is joined on the table with the confirmed
+        column marking the specific entry.
+        '''
+
+        syndromes = self.flatten_syndromdict('suggested_syndromes')
+        # create a dataframe from the list of suggested syndromes
+        if syndromes:
+            syndromes_df = pandas.DataFrame.from_dict(syndromes)
+        else:
+            syndromes_df = pandas.DataFrame(
+                columns=[
+                    "omim_id", "gestalt_score", "combined_score",
+                    "feature_score", "has_mask", "syndrome_name"
+                ]
+            )
+        #drop rows with missing omim ids
+
+        syndromes_df.dropna(inplace=True)
+        # force omim_id to always be a list, required for exploding the df
+        syndromes_df['omim_id'] = syndromes_df['omim_id'].apply(
+            OMIM_INST.replace_deprecated_all
+        )
+
+        # turn omim_list into multiple rows with other properties duplicated
+        syndromes_df = explode_df_column(syndromes_df, 'omim_id')
+        syndromes_df['omim_id'] = syndromes_df['omim_id'].astype(int)
+
+        # preprare the confirmed diagnosis for joining with the main syndrome
+        # dataframe
+        selected_syndromes = self.flatten_syndromdict()
+
+        if selected_syndromes:
+            selected = pandas.DataFrame.from_dict(selected_syndromes)
+
+            # force omim_id to always be a list, required for exploding the df
+            selected['omim_id'] = selected['omim_id'].apply(
+                OMIM_INST.replace_deprecated_all
+            )
+
+            # create multiple rows from list of omim_id entries duplicating
+            # other information
+            selected = explode_df_column(selected, 'omim_id')
+            selected['omim_id'] = selected['omim_id'].astype(int)
+
+            # add a confirmed diagnosis column
+            selected.loc[
+                selected["diagnosis"].isin(
+                    constants.CONFIRMED_DIAGNOSIS
+                ), 'confirmed'
+            ] = True
+            selected.loc[
+                selected["diagnosis"].isin(
+                    constants.DIFFERENTIAL_DIAGNOSIS
+                ), 'differential'
+            ] = True
+            selected.drop('diagnosis',axis=1, inplace=True)
+            # outer join of the syndrome and the confirmed diagnosis
+            # pandas.merge has to be used instead of join, because the latter
+            # only joins on indices
+            syndromes_df = syndromes_df.merge(
+                selected, on=['omim_id', 'syndrome_name'], how='outer')
+            # set all entries not present in the selected syndromes to not
+            # confirmed
+            syndromes_df = syndromes_df.fillna({'confirmed': False,'differential': False})
+            syndromes_df["combined_score"] = 0
+            syndromes_df['has_mask'] = [True if float(x) > 0  else False for x in syndromes_df['gestalt_score']]
+            syndromes_df = syndromes_df.reset_index(drop=True)
+        else:
+            # if no syndromes selected, everything is false
+            syndromes_df["confirmed"] = False
+            syndromes_df["differential"] = False
+
+        syndromes_df['omim_id'] = syndromes_df['omim_id'].astype(int)
+
+        return syndromes_df
+
+    def flatten_syndromdict(self,syndromekind : str = 'selected_syndromes') -> [{str : str}]:
+        '''extracts syndrome name and omim id from subentry'''
+        syndromes = self._js['case_data'][syndromekind]
+        for syndrome in syndromes:
+            syndrome['omim_id'] = syndrome['syndrome']['omim_id']
+            syndrome['syndrome_name'] = syndrome['syndrome']['syndrome_name']
+            del(syndrome['syndrome'])
+        return syndromes
